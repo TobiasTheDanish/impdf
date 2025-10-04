@@ -38,7 +38,11 @@ type UiSize =
       strictness?: number;
     };
 
-type WidgetDataKind = "none" | "text" | "image";
+type WidgetDataKind = "none" | "text" | "image" | 'line';
+type WidgetLineData = {
+  kind: Extract<WidgetDataKind, "line">;
+  dir: 'horizontal' | 'vertical',
+};
 type WidgetTextData = {
   kind: Extract<WidgetDataKind, "text">;
   data: string;
@@ -55,7 +59,8 @@ type WidgetData =
       kind: Extract<WidgetDataKind, "none">;
     }
   | WidgetImageData
-  | WidgetTextData;
+  | WidgetTextData
+  | WidgetLineData;
 
 const emptyWidgetData: WidgetData = {
   kind: "none",
@@ -78,6 +83,7 @@ type ImageWidgetOptions = {
   };
   padding?: number;
 };
+type LineWidgetOptions = Pick<ImageWidgetOptions, 'padding' | 'height' | 'width'>
 
 type Widget<TWidgetData extends WidgetData = WidgetData> = {
   parent?: Widget;
@@ -99,6 +105,7 @@ type Widget<TWidgetData extends WidgetData = WidgetData> = {
 
 type TextWidget = Widget<WidgetTextData>;
 type ImageWidget = Widget<WidgetImageData>;
+type LineWidget = Widget<WidgetLineData>;
 
 function isTextWidget(w: Widget): w is TextWidget {
   return w.data.kind == "text";
@@ -106,6 +113,10 @@ function isTextWidget(w: Widget): w is TextWidget {
 
 function isImageWidget(w: Widget): w is ImageWidget {
   return w.data.kind == "image";
+}
+
+function isLineWidget(w: Widget): w is LineWidget {
+  return w.data.kind == "line";
 }
 
 function isDownwardSizeDependent(w: Widget): boolean {
@@ -116,13 +127,6 @@ function isDownwardSizeDependent(w: Widget): boolean {
 
 	return downwardDependentSizeKinds.includes(w.sizeX.kind) || downwardDependentSizeKinds.includes(w.sizeY.kind)
 }
-
-const colors = [
-  [255, 0, 0],
-  [0, 255, 0],
-  [0, 0, 255],
-  [0, 0, 0],
-];
 
 class ImPdf {
   private doc: jsPDF;
@@ -261,6 +265,45 @@ class ImPdf {
 
     this.pushChildWidget(widget);
   }
+
+	lineWidget(dir: 'horizontal' | 'vertical', options: LineWidgetOptions) {
+		const {width, height, padding = 1} = options
+
+    const widget: LineWidget = {
+      padding,
+      elementPadding: 0,
+      sizeX: {
+        kind: width.sizeKind,
+        value: width.value,
+        strictness: width.sizeKind == 'pixels' ? 1 : 0,
+      },
+      sizeY: {
+        kind: height.sizeKind,
+        value: height.value,
+        strictness: height.sizeKind == 'pixels' ? 1 : 0,
+      },
+      relativePosition: {
+        x: 0,
+        y: 0,
+      },
+      dimensions: {
+        w: 0,
+        h: 0,
+      },
+      screenRect: {
+        x: 0,
+        y: 0,
+        w: 0,
+        h: 0,
+      },
+      data: {
+        kind: "line",
+				dir,
+      },
+    };
+
+    this.pushChildWidget(widget);
+	}
 
   rowWidget(children: (row: ImPdf) => void, options: LayoutWidgetOptions = {}) {
     const { fillPercent, padding = 2, elementPadding = 1 } = options;
@@ -402,8 +445,8 @@ class ImPdf {
       this.renderTextWidget(w, p);
     } else if (isImageWidget(w)) {
       this.renderImageWidget(w, p);
-    } else {
-			//this.doc.rect(p.x, p.y, p.w, p.h);
+    } else if (isLineWidget(w)) {
+			this.renderLineWidget(w)
 		}
 
     if (w.children != undefined) {
@@ -427,6 +470,33 @@ class ImPdf {
       w.dimensions.h,
     );
   }
+
+	renderLineWidget(w: LineWidget) {
+		const p1 = {
+			x: w.data.dir == 'horizontal' 
+				? w.screenRect.x 
+				: w.screenRect.x + w.screenRect.w * 0.5,
+			y: w.data.dir == 'horizontal' 
+				? w.screenRect.y + w.screenRect.h * 0.5
+				: w.screenRect.y,
+		}
+
+		const p2 = {
+			x: w.data.dir == 'horizontal' 
+				? w.screenRect.x + w.screenRect.w
+				: w.screenRect.x + w.screenRect.w * 0.5,
+			y: w.data.dir == 'horizontal' 
+				? w.screenRect.y + w.screenRect.h * 0.5
+				: w.screenRect.y + w.screenRect.h,
+		}
+
+		this.doc.line(
+			p1.x,
+			p1.y,
+			p2.x,
+			p2.y,
+		)
+	}
 
   calculateWidgetLayoutFromRoot() {
 		this.root = this.calculateWidgetLayout(this.root)
@@ -499,7 +569,7 @@ class ImPdf {
 
       const parentDim: Dimensions = parent?.dimensions ?? {
         w: this.maxX,
-        h: Number.MAX_VALUE,
+        h: this.pageDimensions.h,
       };
 
       w.dimensions.w = parentDim.w * (w.sizeX.value / 100);
@@ -522,7 +592,7 @@ class ImPdf {
 
       const parentDim: Dimensions = parent?.dimensions ?? {
         w: this.maxX,
-        h: Number.MAX_VALUE,
+        h: this.pageDimensions.h,
       };
 
       w.dimensions.h = parentDim.h * (w.sizeY.value / 100);
@@ -843,6 +913,17 @@ async function widgetMain() {
           value: 50,
         },
       });
+			doc.lineWidget('vertical', {
+				height: {
+					sizeKind: 'percentOfParent',
+					value: 100,
+				},
+				width: {
+					sizeKind: 'pixels',
+					value: 1,
+				},
+				padding: 0,
+			})
       row.columnWidget((col) => {
         col.textWidget(
           "This is a hella long text that should wrap, but im not sure if it will do it correctly.",
@@ -854,6 +935,18 @@ async function widgetMain() {
     },
     { fillPercent: 100, elementPadding: 1 },
   );
+
+	doc.lineWidget('horizontal', {
+		width: {
+			sizeKind: 'percentOfParent',
+			value: 100,
+		},
+		height: {
+			sizeKind: 'pixels',
+			value: 1,
+		},
+		padding: 2,
+	})
 
 	doc.textWidget(
 		"This is a hella long text that should wrap, but im not sure if it will do it correctly.",
